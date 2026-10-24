@@ -24,7 +24,11 @@ class CatalogAggregator(
     }
 
     suspend fun catalog(request: ProviderCatalogRequest): UnifiedCatalogResult {
-        val batch = repository.catalogAll(request)
+        val batch = if (request.sectionId == null) {
+            repository.catalogAll(request)
+        } else {
+            repository.catalogAllSupportingSection(request)
+        }
         return UnifiedCatalogResult(
             items = merge(batch.values.values.flatMap { it.items }),
             failures = batch.failures,

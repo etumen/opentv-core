@@ -3,6 +3,7 @@ package app.opentv.data.catalog
 import app.opentv.data.provider.Provider
 import app.opentv.data.provider.ProviderCatalogPage
 import app.opentv.data.provider.ProviderCatalogRequest
+import app.opentv.data.provider.ProviderCatalogSection
 import app.opentv.data.provider.ProviderDetails
 import app.opentv.data.provider.ProviderEpisode
 import app.opentv.data.provider.ProviderItem
@@ -247,6 +248,63 @@ class CatalogAggregatorTest {
     }
 
     @Test
+    fun platformSection_queriesOnlyProvidersThatAdvertiseIt() = runTest {
+        val repository = ProviderRepository(
+            ProviderRegistry(
+                listOf(
+                    FakeProvider(
+                        id = "netflix-a",
+                        sections = listOf(
+                            ProviderCatalogSection(
+                                id = "netflix",
+                                title = "Netflix",
+                                mediaType = ProviderMediaType.SERIES,
+                            ),
+                        ),
+                        catalogPages = mapOf(
+                            1 to listOf(
+                                ProviderItem("", "a-reacher", "Reacher", ProviderMediaType.SERIES, year = 2022),
+                            ),
+                        ),
+                    ),
+                    FakeProvider(
+                        id = "default-only",
+                        sections = listOf(
+                            ProviderCatalogSection(
+                                id = "latest",
+                                title = "Latest",
+                                mediaType = ProviderMediaType.SERIES,
+                            ),
+                        ),
+                        catalogPages = mapOf(
+                            1 to listOf(
+                                ProviderItem("", "wrong", "Not Netflix", ProviderMediaType.SERIES, year = 2025),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val result = CatalogAggregator(repository).catalog(
+            ProviderCatalogRequest(
+                mediaType = ProviderMediaType.SERIES,
+                sectionId = "netflix",
+            ),
+        )
+
+        assertThat(result.items.map { it.title }).containsExactly("Reacher")
+        assertThat(result.items.single().sources.map { it.providerId })
+            .containsExactly("netflix-a")
+
+        val pager = CatalogAggregator(repository).pager(
+            mediaType = ProviderMediaType.SERIES,
+            sectionId = "netflix",
+        )
+        val page = pager.loadInitial()
+        assertThat(page.items.map { it.title }).containsExactly("Reacher")
+    }
+    @Test
     fun matcher_normalizesTurkishCharactersAndPunctuation() {
         val items = listOf(
             ProviderItem("a", "1", "Çağrı: İstanbul", ProviderMediaType.MOVIE, year = 2024),
@@ -265,10 +323,12 @@ class CatalogAggregatorTest {
         private val throwOnSearch: Boolean = false,
         private val catalogPages: Map<Int, List<ProviderItem>> = emptyMap(),
         private val nextPages: Map<Int, Int?> = emptyMap(),
+        private val sections: List<ProviderCatalogSection> = emptyList(),
     ) : Provider {
         override val name: String = id
         override val supportedMediaTypes =
             setOf(ProviderMediaType.MOVIE, ProviderMediaType.SERIES)
+        override val catalogSections: List<ProviderCatalogSection> = sections
 
         override suspend fun catalog(request: ProviderCatalogRequest) =
             ProviderResult.Success(

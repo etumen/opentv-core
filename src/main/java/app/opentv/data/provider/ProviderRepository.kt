@@ -57,6 +57,39 @@ class ProviderRepository(
             catalog(provider.id, request)
         }
 
+    suspend fun catalogAllSupportingSection(
+        request: ProviderCatalogRequest,
+    ): ProviderBatchResult<ProviderCatalogPage> {
+        val sectionId = request.sectionId ?: return catalogAll(request)
+        return batch(
+            providersSupportingSection(request.mediaType, sectionId),
+        ) { provider ->
+            catalog(provider.id, request)
+        }
+    }
+
+    suspend fun providersSupportingSection(
+        mediaType: ProviderMediaType,
+        sectionId: String,
+    ): List<Provider> = coroutineScope {
+        registry.supporting(mediaType).map { provider ->
+            async {
+                val sections = when (
+                    val result = call(provider, "catalogSections") {
+                        provider.discoverCatalogSections(mediaType)
+                    }
+                ) {
+                    is ProviderResult.Success -> result.value
+                    is ProviderResult.Failure -> provider.catalogSections
+                }
+                provider.takeIf {
+                    sections.any { section ->
+                        section.mediaType == mediaType && section.id == sectionId
+                    }
+                }
+            }
+        }.awaitAll().filterNotNull()
+    }
     suspend fun search(
         providerId: String,
         request: ProviderSearchRequest,

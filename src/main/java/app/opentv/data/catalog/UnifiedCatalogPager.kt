@@ -37,7 +37,9 @@ class UnifiedCatalogPager internal constructor(
         nextPages.clear()
         failures.clear()
 
-        val providers = repository.providers(mediaType)
+        val providers = sectionId?.let {
+            repository.providersSupportingSection(mediaType, it)
+        } ?: repository.providers(mediaType)
         val results = coroutineScope {
             providers.map { provider ->
                 async {
