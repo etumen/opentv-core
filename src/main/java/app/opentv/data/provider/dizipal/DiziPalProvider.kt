@@ -41,7 +41,7 @@ class DiziPalProvider(
     override val supportedMediaTypes = setOf(ProviderMediaType.SERIES)
 
     private val browser = context?.let(::DiziPalBrowserSession)
-    internal fun browserSession(): DiziPalBrowserSession? = browser
+    fun browserSession(): DiziPalBrowserSession? = browser
     private val domainPrefs = context?.applicationContext?.getSharedPreferences(
         DOMAIN_PREFS,
         Context.MODE_PRIVATE,
@@ -1426,7 +1426,7 @@ class DiziPalProvider(
         private const val DOMAIN_SOURCE =
             "https://raw.githubusercontent.com/aytzey/cs-kraptor/master/doms/eklenti_domainleri.txt"
         private const val HLS_MIME = "application/x-mpegURL"
-        internal const val SITE_USER_AGENT =
+        const val SITE_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 16; SM-S938B) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
         private const val EXTERNAL_USER_AGENT = SITE_USER_AGENT

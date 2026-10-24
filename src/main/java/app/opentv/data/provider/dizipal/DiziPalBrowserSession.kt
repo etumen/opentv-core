@@ -34,7 +34,7 @@ import org.json.JSONTokener
  * reaches the real site. Keep one hidden Chromium session and run same-origin fetch() calls inside
  * it. Only DiziPal pages use this transport; resolved video/CDN URLs still go through OkHttp/Media3.
  */
-internal class DiziPalBrowserSession(
+class DiziPalBrowserSession(
     context: Context,
 ) {
     private val appContext = context.applicationContext
