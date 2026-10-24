@@ -165,17 +165,28 @@ class DiziPalProvider(
             ?: "1"
         val slug = section.path.substringAfterLast('/').ifBlank { "netflix" }
 
-        val response = session.postForm(
-            url = base + "/bg/getserielistbychannel",
-            data = listOf(
-                "cKey" to CHANNEL_API_KEY,
-                "cValue" to CHANNEL_API_VALUE,
-                "curPage" to page.toString(),
-                "channelId" to channelId,
-                "languageId" to "2,3,4",
-                "slug" to slug,
-            ),
-        )
+        val response = runCatching {
+            session.postForm(
+                url = base + "/bg/getserielistbychannel",
+                data = listOf(
+                    "cKey" to CHANNEL_API_KEY,
+                    "cValue" to CHANNEL_API_VALUE,
+                    "curPage" to page.toString(),
+                    "channelId" to channelId,
+                    "languageId" to "2,3,4",
+                    "slug" to slug,
+                ),
+            )
+        }.onFailure {
+            Log.w(
+                TAG,
+                "Legacy channel API unavailable for " + section.title +
+                    "; using rendered channel page",
+                it,
+            )
+        }.getOrNull()
+
+        if (response == null) return staticItems
 
         val html = runCatching {
             json.parseToJsonElement(response)
