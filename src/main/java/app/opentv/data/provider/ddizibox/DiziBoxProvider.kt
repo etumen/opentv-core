@@ -77,7 +77,7 @@ class DiziBoxProvider(
         "drama" to Section("Dram", "/tur/dram", showOnHome = false),
         "netflix" to Section("Netflix", "/platform/netflix"),
         "prime" to Section("Amazon Prime", "/platform/amazon-prime"),
-        "disney" to Section("Disney+", "/platform/disney", showOnHome = false),
+        "disney" to Section("Disney+", "/platform/disney"),
     )
 
     override val catalogSections: List<ProviderCatalogSection>

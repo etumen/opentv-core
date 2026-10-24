@@ -78,6 +78,29 @@ class DiziPalProviderTest {
     }
 
     @Test
+    fun seriesCards_readsNextJsFlightPayload() {
+        val html = """
+            <html><body>
+              <script>
+                self.__next_f.push([1,"30:[{\"id\":\"dizi1\",\"t\":\"Reacher\",\"href\":\"/series/reacher\",\"img\":\"https://images.example/reacher.jpg\",\"r\":\"8.0\",\"year\":\"2022\",\"genres\":\"Aksiyon · Suç\"}]"])
+              </script>
+            </body></html>
+        """.trimIndent()
+
+        val items = provider.parseSeriesCards(
+            Jsoup.parse(html, "https://dizipal1592.com/kanal/netflix"),
+        )
+
+        assertThat(items).hasSize(1)
+        assertThat(items.single().title).isEqualTo("Reacher")
+        assertThat(items.single().id).isEqualTo("https://dizipal1592.com/series/reacher")
+        assertThat(items.single().posterUrl).isEqualTo("https://images.example/reacher.jpg")
+        assertThat(items.single().year).isEqualTo(2022)
+        assertThat(items.single().rating).isEqualTo(8.0)
+        assertThat(items.single().genres).containsExactly("Aksiyon", "Suç").inOrder()
+    }
+
+    @Test
     fun latestEpisodeCard_mapsBackToSeries() {
         val html = """
             <div class="episodes-list-grid">

@@ -301,12 +301,77 @@ class DiziPalProvider(
                 ?: return@mapNotNull null
             parseSeriesAnchor(anchor, element, doc)
         }
-        if (legacy.isNotEmpty()) return legacy.distinctBy { it.id }
-
-        return doc.select("a[href*='/series/'], a[href*='/dizi/']").mapNotNull { anchor ->
+        val current = doc.select("a[href*='/series/'], a[href*='/dizi/']").mapNotNull { anchor ->
             parseSeriesAnchor(anchor, anchor, doc)
-        }.distinctBy { it.id }
+        }
+        val nextPayload = parseNextSeriesCards(doc)
+
+        return (legacy + current + nextPayload)
+            .distinctBy { it.id }
     }
+
+    private fun parseNextSeriesCards(doc: Document): List<ProviderItem> {
+        val payload = doc.html()
+            .replace("\\\"", "\"")
+            .replace("\\/", "/")
+
+        val objects = Regex(
+            """\{[^{}]{0,5000}"href":"(/series/[^"]+)"[^{}]{0,5000}\}""",
+            setOf(RegexOption.DOT_MATCHES_ALL),
+        ).findAll(payload)
+
+        return objects.mapNotNull { match ->
+            val raw = match.value
+            val href = Regex(""""href":"([^"]+)"""")
+                .find(raw)?.groupValues?.getOrNull(1)
+                ?: return@mapNotNull null
+            val title = Regex(""""t":"([^"]+)"""")
+                .find(raw)?.groupValues?.getOrNull(1)
+                ?.decodeJsonString()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val poster = Regex(""""img":"([^"]*)"""")
+                .find(raw)?.groupValues?.getOrNull(1)
+                ?.decodeJsonString()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            val year = Regex(""""year":"((?:19|20)\d{2})"""")
+                .find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val rating = Regex(""""(?:r|imdb)":"([0-9]+(?:\.[0-9]+)?)"""")
+                .find(raw)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+            val genres = Regex(""""genres":"([^"]*)"""")
+                .find(raw)?.groupValues?.getOrNull(1)
+                ?.decodeJsonString()
+                ?.split('·', ',')
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                .orEmpty()
+
+            ProviderItem(
+                providerId = id,
+                id = absoluteFrom(doc.baseUri().ifBlank { FALLBACK_BASE_URL }, href)
+                    ?: return@mapNotNull null,
+                title = title,
+                mediaType = ProviderMediaType.SERIES,
+                posterUrl = poster?.let {
+                    absoluteFrom(doc.baseUri().ifBlank { FALLBACK_BASE_URL }, it) ?: it
+                },
+                year = year,
+                rating = rating,
+                genres = genres,
+            )
+        }.distinctBy { it.id }.toList()
+    }
+
+    private fun String.decodeJsonString(): String =
+        replace("""\u0026""", "&")
+            .replace("""\u003c""", "<")
+            .replace("""\u003e""", ">")
+            .replace("""\n""", " ")
+            .replace("""\t""", " ")
+            .replace("""\\\"""", "\"")
+            .replace("""\\\\""", "\\")
 
     private fun parseSeriesAnchor(
         anchor: Element,
