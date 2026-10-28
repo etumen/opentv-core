@@ -87,7 +87,7 @@ class DiziPalProvider(
         "netflix" to Section("Netflix", "/kanal/netflix"),
         "exxen" to Section("Exxen", "/kanal/exxen"),
         "disney" to Section("Disney+", "/kanal/disney"),
-        "prime" to Section("Amazon Prime", "/kanal/amazon"),
+        "prime" to Section("Prime Video", "/kanal/prime-video"),
         "apple" to Section("Apple TV+", "/kanal/apple-tv", showOnHome = false),
         "max" to Section("Max", "/kanal/max", showOnHome = false),
         "hulu" to Section("Hulu", "/kanal/hulu", showOnHome = false),
@@ -150,19 +150,17 @@ class DiziPalProvider(
         section: Section,
         page: Int,
     ): List<ProviderItem> {
-        val pageUrl = base + section.path
+        val pageUrl = if (page == 1) {
+            base + section.path
+        } else {
+            base + section.path + "?page=$page"
+        }
         val doc = fetchDocument(pageUrl)
-        val staticItems = if (page == 1) parseSeriesCards(doc) else emptyList()
+        val renderedItems = parseChannelSeriesCards(doc)
+        if (renderedItems.isNotEmpty()) return renderedItems
 
-        val session = browser ?: return staticItems
-        val channelId = doc.selectFirst("input[name=channelId]")?.attr("value")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: Regex("""channelId\s*[:=]\s*(\d+)""")
-                .find(doc.html())
-                ?.groupValues
-                ?.getOrNull(1)
-            ?: "1"
+        val session = browser ?: return emptyList()
+        val channelId = extractChannelId(doc) ?: return emptyList()
         val slug = section.path.substringAfterLast('/').ifBlank { "netflix" }
 
         val response = runCatching {
@@ -180,13 +178,10 @@ class DiziPalProvider(
         }.onFailure {
             Log.w(
                 TAG,
-                "Legacy channel API unavailable for " + section.title +
-                    "; using rendered channel page",
+                "Legacy channel API unavailable for " + section.title,
                 it,
             )
-        }.getOrNull()
-
-        if (response == null) return staticItems
+        }.getOrNull() ?: return emptyList()
 
         val html = runCatching {
             json.parseToJsonElement(response)
@@ -197,13 +192,11 @@ class DiziPalProvider(
                 ?.contentOrNull
         }.getOrNull().orEmpty()
 
-        val apiItems = if (html.isBlank()) {
+        return if (html.isBlank()) {
             emptyList()
         } else {
-            parseSeriesCards(Jsoup.parse(html, pageUrl))
+            parseSeriesCards(Jsoup.parse(html, pageUrl)).distinctBy { it.id }
         }
-
-        return (staticItems + apiItems).distinctBy { it.id }
     }
 
     override suspend fun search(
@@ -310,11 +303,87 @@ class DiziPalProvider(
             .distinctBy { it.id }
     }
 
-    private fun parseNextSeriesCards(doc: Document): List<ProviderItem> {
-        val payload = doc.html()
+    internal fun parseChannelSeriesCards(doc: Document): List<ProviderItem> {
+        val channelItems = extractNextChannelItemsPayload(doc)
+            ?.let { parseNextSeriesObjects(it, doc) }
+            .orEmpty()
+        return channelItems.ifEmpty { parseSeriesCards(doc) }
+    }
+
+    internal fun extractChannelId(doc: Document): String? {
+        doc.selectFirst("input[name=channelId]")?.attr("value")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+
+        Regex("""channelId\s*[:=]\s*(\d+)""")
+            .find(doc.html())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return it }
+
+        return Regex(
+            """"action":"getSerieListByChannel","params":\[(\d+),""",
+        ).find(normalizedNextPayload(doc))
+            ?.groupValues
+            ?.getOrNull(1)
+    }
+
+    private fun normalizedNextPayload(doc: Document): String =
+        doc.html()
             .replace("\\\"", "\"")
             .replace("\\/", "/")
 
+    private fun extractNextChannelItemsPayload(doc: Document): String? {
+        val payload = normalizedNextPayload(doc)
+        val marker = payload.indexOf("\"action\":\"getSerieListByChannel\"")
+        if (marker < 0) return null
+
+        val key = payload.lastIndexOf("\"items\":[", marker)
+        if (key < 0) return null
+        val arrayStart = payload.indexOf('[', key)
+        if (arrayStart < 0 || arrayStart >= marker) return null
+
+        val arrayEnd = findJsonArrayEnd(payload, arrayStart) ?: return null
+        if (arrayEnd > marker) return null
+        return payload.substring(arrayStart + 1, arrayEnd)
+    }
+
+    private fun findJsonArrayEnd(value: String, start: Int): Int? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (index in start until value.length) {
+            val char = value[index]
+            if (inString) {
+                if (escaped) {
+                    escaped = false
+                } else if (char == '\\') {
+                    escaped = true
+                } else if (char == '"') {
+                    inString = false
+                }
+                continue
+            }
+            when (char) {
+                '"' -> inString = true
+                '[' -> depth += 1
+                ']' -> {
+                    depth -= 1
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return null
+    }
+
+    private fun parseNextSeriesCards(doc: Document): List<ProviderItem> =
+        parseNextSeriesObjects(normalizedNextPayload(doc), doc)
+
+    private fun parseNextSeriesObjects(
+        payload: String,
+        doc: Document,
+    ): List<ProviderItem> {
         val objects = Regex(
             """\{[^{}]{0,5000}"href":"(/series/[^"]+)"[^{}]{0,5000}\}""",
             setOf(RegexOption.DOT_MATCHES_ALL),

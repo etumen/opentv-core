@@ -101,6 +101,22 @@ class DiziPalProviderTest {
     }
 
     @Test
+    fun channelCards_ignorePopularPayloadAndReadChannelItems() {
+        val html = """
+            <html><body>
+              <script>
+                self.__next_f.push([1,"30:{\"popular\":[{\"id\":\"dizi0\",\"t\":\"Below\",\"href\":\"/series/below\",\"img\":\"/poster/below.jpg\",\"year\":\"2026\"}],\"items\":[{\"id\":\"dizi1\",\"t\":\"Netflix Only\",\"href\":\"/series/netflix-only\",\"img\":\"/poster/netflix.jpg\",\"r\":\"8.4\",\"year\":\"2025\",\"genres\":\"Dram\"}],\"error\":false,\"hasMore\":true,\"more\":{\"action\":\"getSerieListByChannel\",\"params\":[10,1,\"2,3,4\"],\"pageAt\":1,\"next\":2}}"])
+              </script>
+            </body></html>
+        """.trimIndent()
+        val doc = Jsoup.parse(html, "https://dizipal1592.com/kanal/netflix")
+
+        val items = provider.parseChannelSeriesCards(doc)
+
+        assertThat(items.map { it.title }).containsExactly("Netflix Only")
+        assertThat(provider.extractChannelId(doc)).isEqualTo("10")
+    }
+    @Test
     fun latestEpisodeCard_mapsBackToSeries() {
         val html = """
             <div class="episodes-list-grid">
