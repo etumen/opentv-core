@@ -16,6 +16,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -333,6 +336,51 @@ class DiziPalProvider(
         doc.html()
             .replace("\\\"", "\"")
             .replace("\\/", "/")
+
+    internal fun extractEncryptedPlayerPayload(doc: Document): String? {
+        val payload = normalizedNextPayload(doc)
+        val encMarker = payload.indexOf("\"enc\":")
+        if (encMarker < 0) return null
+
+        val objectStart = payload.indexOf('{', encMarker)
+        if (objectStart < 0) return null
+        val objectEnd = findJsonObjectEnd(payload, objectStart) ?: return null
+        val candidate = payload.substring(objectStart, objectEnd + 1)
+
+        return candidate.takeIf {
+            it.contains("\"ciphertext\":") &&
+                it.contains("\"iv\":") &&
+                it.contains("\"salt\":")
+        }
+    }
+
+    private fun findJsonObjectEnd(value: String, start: Int): Int? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (index in start until value.length) {
+            val char = value[index]
+            if (inString) {
+                if (escaped) {
+                    escaped = false
+                } else if (char == '\\') {
+                    escaped = true
+                } else if (char == '"') {
+                    inString = false
+                }
+                continue
+            }
+            when (char) {
+                '"' -> inString = true
+                '{' -> depth += 1
+                '}' -> {
+                    depth -= 1
+                    if (depth == 0) return index
+                }
+            }
+        }
+        return null
+    }
 
     private fun extractNextChannelItemsPayload(doc: Document): String? {
         val payload = normalizedNextPayload(doc)
@@ -657,14 +705,12 @@ class DiziPalProvider(
                 .getOrNull() ?: return@forEach
             val type = root["@type"]?.jsonPrimitive?.contentOrNull.orEmpty()
             if (!type.equals("TVSeries", ignoreCase = true)) return@forEach
-            root["containsSeason"]?.jsonArray.orEmpty().forEach { seasonElement ->
-                val seasonObject = seasonElement.jsonObject
+            jsonObjectList(root["containsSeason"]).forEach { seasonObject ->
                 val seasonUrl = seasonObject["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 val seasonNumber = seasonObject["seasonNumber"]?.jsonPrimitive?.intOrNull
                     ?: Regex("""(?:sezon-|/season/)(\d+)""")
                         .find(seasonUrl)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                seasonObject["episode"]?.jsonArray.orEmpty().forEach { episodeElement ->
-                    val episodeObject = episodeElement.jsonObject
+                jsonObjectList(seasonObject["episode"]).forEach { episodeObject ->
                     val rawUrl = episodeObject["url"]?.jsonPrimitive?.contentOrNull
                         ?.takeIf { it.isNotBlank() } ?: return@forEach
                     val urlMatch = Regex("""-(\d+)x(\d+)(?:[-/?#].*)?$""").find(rawUrl)
@@ -696,6 +742,12 @@ class DiziPalProvider(
             }
         }
         return result
+    }
+
+    private fun jsonObjectList(element: JsonElement?): List<JsonObject> = when (element) {
+        is JsonObject -> listOf(element)
+        is JsonArray -> element.mapNotNull { it as? JsonObject }
+        else -> emptyList()
     }
 
     private fun normalizeDiziPalEpisodeUrl(base: String, raw: String): String? {
@@ -777,6 +829,7 @@ class DiziPalProvider(
             val doc = Jsoup.parse(page.body, episodeUrl)
             val encryptedPayload = doc.selectFirst("div[data-rm-k=true]")
                 ?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: extractEncryptedPlayerPayload(doc)
 
             val currentEmbed = encryptedPayload?.let(DiziPalCodec::decryptRmk)
             if (currentEmbed != null) {
@@ -828,6 +881,13 @@ class DiziPalProvider(
         val embedResponse = execute(embedRequest)
         val source = embedResponse.body
 
+        extractDplayerNpConfig(source)?.let { config ->
+            return resolveDplayerNpConfig(
+                config = config,
+                embedUrl = embedUrl,
+            )
+        }
+
         val subtitles = Regex(
             """"file"\s*:\s*"((?:\\\"|[^"])+)"\s*,\s*"label"\s*:\s*"((?:\\\"|[^"])+)"""",
             RegexOption.IGNORE_CASE,
@@ -860,13 +920,13 @@ class DiziPalProvider(
             )
         }.distinctBy { it.url }.toList()
 
+        val parsedEmbed = embedUrl.toHttpUrl()
         val playlistId = Regex(
             """window\.openPlayer\s*\(\s*['"]([^'"]+)['"]""",
             RegexOption.IGNORE_CASE,
         ).find(source)?.groupValues?.getOrNull(1)
+            ?: parsedEmbed.queryParameter("v")?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("DPlayer playlist id not found")
-
-        val parsedEmbed = embedUrl.toHttpUrl()
         val origin = parsedEmbed.scheme + "://" + parsedEmbed.host
         val apiUrl = origin.trimEnd('/') + "/source2.php?v=" +
             URLEncoder.encode(playlistId, StandardCharsets.UTF_8.name())
@@ -928,6 +988,95 @@ class DiziPalProvider(
 
         Log.d(TAG, "DPlayer streams resolved: " + distinctStreams.size)
         return Playback(streams = distinctStreams, subtitles = subtitles)
+    }
+
+    internal fun extractDplayerNpConfig(source: String): String? {
+        val marker = "window.NP_CONFIG"
+        val assignment = source.indexOf(marker)
+        if (assignment < 0) return null
+        val objectStart = source.indexOf('{', assignment + marker.length)
+        if (objectStart < 0) return null
+        val objectEnd = findJsonObjectEnd(source, objectStart) ?: return null
+        return source.substring(objectStart, objectEnd + 1)
+    }
+
+    private suspend fun resolveDplayerNpConfig(
+        config: String,
+        embedUrl: String,
+    ): Playback {
+        val root = json.parseToJsonElement(config).jsonObject
+        val parsedEmbed = embedUrl.toHttpUrl()
+        val origin = parsedEmbed.scheme + "://" + parsedEmbed.host
+
+        val subtitles = root["subtitles"]?.jsonArray.orEmpty().mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val url = obj["url"]?.jsonPrimitive?.contentOrNull
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val label = obj["label"]?.jsonPrimitive?.contentOrNull
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: "Altyazı"
+            val language = obj["lang"]?.jsonPrimitive?.contentOrNull
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+            ProviderSubtitle(
+                providerId = id,
+                url = normalizeExternalUrl(url),
+                label = label,
+                language = language,
+                mimeType = null,
+            )
+        }.distinctBy { it.url }
+
+        val streams = mutableListOf<ProviderStream>()
+        root["sources"]?.jsonArray.orEmpty().forEach { element ->
+            val obj = element as? JsonObject ?: return@forEach
+            val rawMaster = obj["master"]?.jsonPrimitive?.contentOrNull
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@forEach
+            val remoteUrl = normalizeExternalUrl(rawMaster)
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: "DPlayer"
+
+            val resolved = resolveDplayerInlinePlaylist(
+                remoteUrl = remoteUrl,
+                embedUrl = embedUrl,
+                origin = origin,
+            ) ?: ResolvedHls(
+                url = remoteUrl,
+                referer = embedUrl,
+            )
+
+            streams += ProviderStream(
+                providerId = id,
+                url = resolved.url,
+                label = "DiziPal · $title",
+                mimeType = HLS_MIME,
+                headers = buildMap {
+                    put("Origin", origin)
+                    put("Referer", resolved.referer)
+                    put("User-Agent", EXTERNAL_USER_AGENT)
+                    put("Accept", "*/*")
+                    if (resolved.cookie.isNotBlank()) put("Cookie", resolved.cookie)
+                },
+            )
+        }
+
+        val distinctStreams = streams.distinctBy { it.url }
+        if (distinctStreams.isEmpty()) {
+            throw IllegalArgumentException("DPlayer NP_CONFIG stream not found")
+        }
+
+        Log.d(TAG, "DPlayer NP_CONFIG streams resolved: " + distinctStreams.size)
+        return Playback(
+            streams = distinctStreams,
+            subtitles = subtitles,
+        )
     }
 
     private suspend fun resolveDplayerInlinePlaylist(

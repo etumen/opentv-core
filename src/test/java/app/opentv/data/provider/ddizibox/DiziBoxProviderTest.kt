@@ -104,6 +104,22 @@ class DiziBoxProviderTest {
     }
 
     @Test
+    fun resolvePlayerOrigin_followsCurrentPlayerScriptHost() {
+        val doc = Jsoup.parse(
+            """
+            <html><body>
+              <div data-pv="opaque"></div>
+              <script src="https://play7.pilavyerplay.top/assets/js/core.js"></script>
+            </body></html>
+            """.trimIndent(),
+            "https://ddizibox.net/dizi/neagley/sezon-1/bolum-1",
+        )
+
+        assertThat(provider.resolvePlayerOrigin(doc))
+            .isEqualTo("https://play7.pilavyerplay.top")
+    }
+
+    @Test
     fun parsePlayerConfig_readsHlsAndSubtitles() {
         val html = """
             <html><script>

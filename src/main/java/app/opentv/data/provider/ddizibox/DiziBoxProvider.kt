@@ -388,7 +388,8 @@ class DiziBoxProvider(
             val token = episodeDoc.selectFirst("[data-pv]")?.attr("data-pv")?.trim()
                 ?.takeIf { it.isNotBlank() }
                 ?: throw IllegalArgumentException("DiziBox player token not found")
-            val playerUrl = PLAYER_ORIGIN.toHttpUrl().newBuilder()
+            val playerOrigin = resolvePlayerOrigin(episodeDoc)
+            val playerUrl = playerOrigin.toHttpUrl().newBuilder()
                 .addPathSegments("assets/js/s.php")
                 .addQueryParameter("s", token)
                 .build()
@@ -407,6 +408,21 @@ class DiziBoxProvider(
             }
         }
         return result
+    }
+
+    internal fun resolvePlayerOrigin(doc: Document): String {
+        val scriptUrl = doc.selectFirst(
+            "script[src*='pilavyerplay'][src*='core.js'], " +
+                "script[src*='pilavyerplay'][src*='/e/c.js']",
+        )?.attr("src")?.trim()?.takeIf { it.isNotBlank() }
+            ?.let { absoluteFrom(doc.baseUri().ifBlank { MAIN_URL }, it) }
+
+        return scriptUrl?.let { url ->
+            runCatching {
+                val parsed = url.toHttpUrl()
+                parsed.scheme + "://" + parsed.host
+            }.getOrNull()
+        } ?: PLAYER_ORIGIN
     }
 
     private suspend fun fetchDocument(url: String): Document =
@@ -492,7 +508,7 @@ class DiziBoxProvider(
     private companion object {
         const val PROVIDER_ID = "ddizibox"
         const val MAIN_URL = "https://ddizibox.com"
-        const val PLAYER_ORIGIN = "https://pilavyerplay.top"
+        const val PLAYER_ORIGIN = "https://play2.pilavyerplay.top"
         const val HLS_MIME = "application/x-mpegURL"
         const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 " +

@@ -117,6 +117,54 @@ class DiziPalProviderTest {
         assertThat(provider.extractChannelId(doc)).isEqualTo("10")
     }
     @Test
+    fun playerPayload_readsEncryptedObjectFromNextFlightData() {
+        val html = """
+            <html><body><script>
+              self.__next_f.push([1,"31:{\"player\":{\"enc\":{\"ciphertext\":\"abc/def==\",\"iv\":\"00112233445566778899aabbccddeeff\",\"salt\":\"aabbccdd\"}}}"])
+            </script></body></html>
+        """.trimIndent()
+        val doc = Jsoup.parse(html, "https://dizipal1592.com/bolum/neagley-1x1")
+
+        val payload = provider.extractEncryptedPlayerPayload(doc)
+
+        assertThat(payload).isNotNull()
+        assertThat(payload).contains("\"ciphertext\":\"abc/def==\"")
+        assertThat(payload).contains("\"iv\":\"00112233445566778899aabbccddeeff\"")
+        assertThat(payload).contains("\"salt\":\"aabbccdd\"")
+    }
+
+    @Test
+    fun dplayerNpConfig_readsCurrentEmbeddedConfig() {
+        val html = """
+            <html><body><script>
+            window.NP_CONFIG = {
+              "id":"episode-id",
+              "sources":[
+                {
+                  "title":"Orijinal",
+                  "kind":"orig",
+                  "master":"https://four.dplayer82.site/nm.php?v=token"
+                }
+              ],
+              "subtitles":[
+                {
+                  "label":"Türkçe",
+                  "lang":"tr",
+                  "url":"https://four.dplayer82.site/nsub.php?v=subtoken"
+                }
+              ]
+            };
+            </script></body></html>
+        """.trimIndent()
+
+        val config = provider.extractDplayerNpConfig(html)
+
+        assertThat(config).isNotNull()
+        assertThat(config).contains("\"master\":\"https://four.dplayer82.site/nm.php?v=token\"")
+        assertThat(config).contains("\"lang\":\"tr\"")
+    }
+
+    @Test
     fun latestEpisodeCard_mapsBackToSeries() {
         val html = """
             <div class="episodes-list-grid">
@@ -235,6 +283,49 @@ class DiziPalProviderTest {
         assertThat(items.single().id)
             .isEqualTo("https://dizipal1592.com/bolum/reacher-1x1-c02")
         assertThat(items.single().description).isEqualTo("Pilot")
+    }
+
+    @Test
+    fun jsonLdEpisodes_acceptsSingleSeasonObject() {
+        val html = """
+            <html><body>
+              <script type="application/ld+json">
+              {
+                "@context":"https://schema.org",
+                "@type":"TVSeries",
+                "name":"Neagley",
+                "containsSeason":{
+                  "@type":"TVSeason",
+                  "url":"http://dizipal1592.com/sezon/neagley/sezon-1",
+                  "seasonNumber":1,
+                  "episode":[
+                    {
+                      "@type":"TVEpisode",
+                      "name":"1. Bölüm",
+                      "url":"http://dizipal1592.com/bolum/neagley-1x1",
+                      "episodeNumber":1
+                    },
+                    {
+                      "@type":"TVEpisode",
+                      "name":"2. Bölüm",
+                      "url":"http://dizipal1592.com/bolum/neagley-1x2",
+                      "episodeNumber":2
+                    }
+                  ]
+                }
+              }
+              </script>
+            </body></html>
+        """.trimIndent()
+
+        val items = provider.parseEpisodes(
+            Jsoup.parse(html, "https://dizipal1592.com/series/neagley"),
+            "https://dizipal1592.com/series/neagley",
+        )
+
+        assertThat(items).hasSize(2)
+        assertThat(items.map { it.episodeNumber }).containsExactly(1, 2).inOrder()
+        assertThat(items.all { it.season == 1 }).isTrue()
     }
 
     @Test
