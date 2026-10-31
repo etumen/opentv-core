@@ -9,6 +9,17 @@ class DiziPalProviderTest {
     private val provider = DiziPalProvider(OkHttpClient())
 
     @Test
+    fun listingPageUrl_usesActualPageParameter() {
+        val base = "https://dizipal1592.com"
+        assertThat(provider.listingPageUrl(base, "/yabanci-dizi-izle", 1))
+            .isEqualTo("$base/yabanci-dizi-izle")
+        assertThat(provider.listingPageUrl(base, "/yabanci-dizi-izle", 2))
+            .isEqualTo("$base/yabanci-dizi-izle?page=2")
+        assertThat(provider.listingPageUrl(base, "/yabanci-dizi-izle?sort=latest", 2))
+            .isEqualTo("$base/yabanci-dizi-izle?sort=latest&page=2")
+    }
+
+    @Test
     fun seriesCards_readCurrentGrid() {
         val html = """
             <ul class="content-grid">

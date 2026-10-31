@@ -130,12 +130,7 @@ class DiziPalProvider(
             }
 
             else -> {
-                val target = if (page == 1) {
-                    base + section.path
-                } else {
-                    val separator = if (section.path.contains('?')) "&" else "?"
-                    base + section.path + separator + "sayfa=$page"
-                }
+                val target = listingPageUrl(base, section.path, page)
                 parseSeriesCards(fetchDocument(target))
             }
         }
@@ -146,6 +141,13 @@ class DiziPalProvider(
             items = items,
             nextPage = if (items.isEmpty()) null else page + 1,
         )
+    }
+
+    /** Next.js catalogue uses `page`, not the legacy `sayfa` query parameter. */
+    internal fun listingPageUrl(base: String, path: String, page: Int): String {
+        if (page <= 1) return base + path
+        val separator = if ('?' in path) "&" else "?"
+        return base + path + separator + "page=$page"
     }
 
     private suspend fun loadChannelPage(
@@ -1426,6 +1428,7 @@ class DiziPalProvider(
         Jsoup.parse(siteRequest(url, baseUrl() + "/").body, url)
 
     private suspend fun baseUrl(): String {
+        app.opentv.data.provider.ProviderRuntimeRules.domain(id)?.let { return it }
         val now = System.currentTimeMillis()
         resolvedBaseUrl
             ?.takeIf { now - resolvedAtMillis < DOMAIN_CACHE_MILLIS }

@@ -25,6 +25,10 @@ import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -66,17 +70,18 @@ class DramaDizilerimProvider(
         }
         val page = request.page.coerceAtLeast(1)
         val target = MAIN_URL.toHttpUrl().newBuilder()
-            .addPathSegment("dizi")
+            .addPathSegment("diziler")
             .apply {
                 if (page > 1) addQueryParameter("page", page.toString())
             }
             .build()
             .toString()
-        val items = parseCards(fetchDocument(target))
+        val doc = fetchDocument(target)
+        val items = parseCards(doc)
         ProviderCatalogPage(
             title = "Asya / Drama",
             items = items,
-            nextPage = if (items.isEmpty()) null else page + 1,
+            nextPage = if (items.isNotEmpty() && parseHasNextPage(doc, page)) page + 1 else null,
         )
     }
 
@@ -139,6 +144,16 @@ class DramaDizilerimProvider(
         return guarded("streams") {
             val watchUrl = absolute(target.episodeId)
             val watchDoc = fetchDocument(watchUrl)
+            val embeddedEpisodeId = watchDoc.selectFirst("video[data-episode-id]")
+                ?.attr("data-episode-id")?.trim()?.takeIf { it.isNotBlank() }
+            if (embeddedEpisodeId != null) {
+                val apiUrl = MAIN_URL.toHttpUrl().newBuilder()
+                    .addPathSegments("api/playback")
+                    .addQueryParameter("episodeId", embeddedEpisodeId)
+                    .build().toString()
+                parsePublicPlayback(fetchText(apiUrl, referer = watchUrl), watchUrl)
+                    ?.let { return@guarded listOf(it) }
+            }
             val episodeNumber = runCatching {
                 watchUrl.toHttpUrl().queryParameter("e")?.toIntOrNull()
             }.getOrNull()
@@ -221,15 +236,26 @@ class DramaDizilerimProvider(
         doc.select("a[href]").mapNotNull(::parseCard)
             .distinctBy { it.id }
 
+    internal fun parseHasNextPage(doc: Document, page: Int): Boolean =
+        doc.select("a[href*='page=']").any { anchor ->
+            val href = anchor.attr("href")
+            val next = Regex("""[?&]page=(\d+)""").find(href)
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+            next == page + 1
+        }
+
     internal fun parseEpisodes(doc: Document, seriesId: String): List<ProviderEpisode> {
         val seen = linkedSetOf<String>()
         return doc.select("a[href*='/izle/']").mapNotNull { anchor ->
             val href = absoluteFrom(doc.baseUri().ifBlank { MAIN_URL }, anchor.attr("href"))
                 ?: return@mapNotNull null
-            if (!seen.add(href)) return@mapNotNull null
             val parsed = runCatching { href.toHttpUrl() }.getOrNull() ?: return@mapNotNull null
             val season = parsed.queryParameter("s")?.toIntOrNull() ?: 1
-            val episode = parsed.queryParameter("e")?.toIntOrNull() ?: return@mapNotNull null
+            val episode = parsed.queryParameter("e")?.toIntOrNull()
+                ?: Regex("""(\d+)\s*\.\s*bölüm""", RegexOption.IGNORE_CASE)
+                    .find(anchor.text())?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: return@mapNotNull null
+            if (!seen.add(href)) return@mapNotNull null
             val title = anchor.text().trim()
                 .replace(Regex("""\s+"""), " ")
                 .takeIf { it.isNotBlank() && !it.contains("Şimdi İzle", ignoreCase = true) }
@@ -245,6 +271,26 @@ class DramaDizilerimProvider(
         }.sortedWith(compareBy<ProviderEpisode> { it.season }.thenBy { it.episodeNumber })
     }
 
+    /** Resolve fresh, expiring HLS tickets provided by the site's public video player. */
+    internal fun parsePublicPlayback(json: String, watchUrl: String): ProviderStream? {
+        val payload = Json.parseToJsonElement(json).jsonObject
+        if (payload["success"]?.jsonPrimitive?.contentOrNull != "true") return null
+        val raw = payload["url"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val media = absoluteFrom(watchUrl, raw) ?: return null
+        val kind = payload["kind"]?.jsonPrimitive?.contentOrNull
+        return ProviderStream(
+            providerId = id,
+            url = media,
+            label = "DramaDizilerim",
+            mimeType = if (kind == "hls" || media.contains(".m3u8", ignoreCase = true)) HLS_MIME else null,
+            headers = mapOf(
+                "Referer" to watchUrl,
+                "User-Agent" to USER_AGENT,
+            ),
+        )
+    }
+
     internal fun extractSource(html: String): String? =
         Regex("""let\s+source\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             .find(html)
@@ -255,16 +301,22 @@ class DramaDizilerimProvider(
     private fun parseCard(anchor: Element): ProviderItem? {
         val href = absoluteFrom(anchor.baseUri().ifBlank { MAIN_URL }, anchor.attr("href"))
             ?: return null
-        if (!runCatching { href.toHttpUrl().encodedPath.contains("/dizi/") }.getOrDefault(false)) {
+        if (!runCatching { href.toHttpUrl().encodedPath.matches(Regex("""/dizi/[^/]+/?""")) }.getOrDefault(false)) {
             return null
         }
         val image = anchor.selectFirst("img")
         val title = image?.attr("alt")?.trim()
             ?.removeSuffix(" İzle")
+            ?.replace(Regex("""(?i)\s+dizi afişi$"""), "")
             ?.takeIf { it.isNotBlank() }
             ?: anchor.selectFirst(".title, h2, h3, h4")?.text()?.trim()
                 ?.takeIf { it.isNotBlank() }
             ?: return null
+        if (href.endsWith("/403-forbidden-nuxt", ignoreCase = true) ||
+            title.contains("403 - Forbidden", ignoreCase = true) ||
+            title.contains("Forbidden | Nuxt", ignoreCase = true)
+        ) return null
+
         val poster = sequenceOf(
             image?.attr("src"),
             image?.attr("data-src"),
