@@ -18,6 +18,7 @@ import kotlinx.coroutines.coroutineScope
  */
 class ProviderRepository(
     private val registry: ProviderRegistry,
+    private val remoteListingAdapter: RemoteListingAdapter? = null,
 ) {
     fun providers(mediaType: ProviderMediaType? = null): List<Provider> =
         if (mediaType == null) registry.all() else registry.supporting(mediaType)
@@ -42,6 +43,10 @@ class ProviderRepository(
         val provider = registry.find(providerId) ?: return missing(providerId, "catalog")
         if (request.mediaType !in provider.supportedMediaTypes) {
             return unsupported(provider, "catalog", request.mediaType)
+        }
+        val remoteRule = ProviderRuntimeRules.listing(providerId, request.sectionId)
+        if (remoteRule != null && remoteListingAdapter != null) {
+            return remoteListingAdapter.catalog(providerId, request, remoteRule)
         }
         return when (val result = call(provider, "catalog") { provider.catalog(request) }) {
             is ProviderResult.Success ->

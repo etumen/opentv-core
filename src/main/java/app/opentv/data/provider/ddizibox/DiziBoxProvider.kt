@@ -105,11 +105,18 @@ class DiziBoxProvider(
                 .toString()
         }
 
-        val items = parseSeriesCards(fetchDocument(target))
+        val doc = fetchDocument(target)
+        val items = parseSeriesCards(doc)
+        // /tur/* pages currently ignore ?page=N. Never advertise a second
+        // genre page unless the website itself links to that next page.
+        val genreNext = doc.select("a[href*='page=']").any { anchor ->
+            Regex("""[?&]page=([0-9]+)""").find(anchor.attr("href"))
+                ?.groupValues?.get(1)?.toIntOrNull() == page + 1
+        }
         ProviderCatalogPage(
             title = section.title,
             items = items,
-            nextPage = if (items.isEmpty()) null else page + 1,
+            nextPage = if (items.isNotEmpty() && (!section.path.startsWith("/tur/") || genreNext)) page + 1 else null,
         )
     }
 
