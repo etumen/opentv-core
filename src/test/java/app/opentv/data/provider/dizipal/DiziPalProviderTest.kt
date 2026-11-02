@@ -20,6 +20,45 @@ class DiziPalProviderTest {
     }
 
     @Test
+    fun romanticCategory_usesRealPaginationAndOnlyVisibleCategoryCards() {
+        val base = DiziPalProvider.FALLBACK_BASE_URL
+        assertThat(provider.listingPageUrl(base, "/kategori/romantik", 2))
+            .isEqualTo("$base/kategori/romantik?page=2")
+        assertThat(provider.catalogSections.any { it.id == "romantik" && it.title == "Romantik" })
+            .isTrue()
+
+        val html = """
+            <div class="g6">
+              <a class="tc" href="/series/romance-one" aria-label="Romance One, 2025">
+                <img src="/poster/one.jpg" /><span class="tt">Romance One</span>
+              </a>
+              <a class="tc" href="/series/romance-two" aria-label="Romance Two, 2024">
+                <span class="tt">Romance Two</span>
+              </a>
+            </div>
+            <a href="/series/sidebar-recommendation"><span class="tt">Unrelated</span></a>
+        """.trimIndent()
+        val items = provider.parseCategorySeriesCards(Jsoup.parse(html, "$base/kategori/romantik"))
+        assertThat(items.map { it.title }).containsExactly("Romance One", "Romance Two").inOrder()
+    }
+
+    @Test
+    fun verifiedSeriesGenresHaveDistinctPagesAndRemainSeriesOnly() {
+        val genres = listOf("romantik", "aksiyon", "dram", "komedi", "korku",
+            "gerilim", "bilim-kurgu", "animasyon", "suc", "macera",
+            "fantastik", "gizem", "aile")
+        val byId = provider.catalogSections.associateBy { it.id }
+        assertThat(byId.keys).containsAtLeastElementsIn(genres)
+        genres.forEach { id ->
+            val section = byId.getValue(id)
+            assertThat(section.mediaType).isEqualTo(app.opentv.data.provider.ProviderMediaType.SERIES)
+            assertThat(section.showOnHome).isFalse()
+            assertThat(provider.listingPageUrl(DiziPalProvider.FALLBACK_BASE_URL,
+                "/kategori/$id", 2)).endsWith("/kategori/$id?page=2")
+        }
+    }
+
+    @Test
     fun seriesCards_readCurrentGrid() {
         val html = """
             <ul class="content-grid">
