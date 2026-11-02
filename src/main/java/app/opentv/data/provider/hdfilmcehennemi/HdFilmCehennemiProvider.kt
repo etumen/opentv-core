@@ -75,7 +75,7 @@ class HdFilmCehennemiProvider(
         "nette_ilk" to Section("Nette İlk", "/category/nette-ilk-filmler-1/", "categories/nette-ilk-filmler-1", ProviderMediaType.MOVIE, showOnHome = true),
         "imdb7" to Section("IMDb 7+ Filmler", "/imdb-7-puan-uzeri-filmler-2/", "imdb7", ProviderMediaType.MOVIE, showOnHome = true),
         "all_movies" to Section("Filmler", "/category/film-izle-2/", "categories/film-izle-2", ProviderMediaType.MOVIE, showOnHome = true),
-        "series" to Section("Diziler", "/yabancidiziizle-7/", "home-series", ProviderMediaType.SERIES, showOnHome = true),
+        "series" to Section("Diziler", "/yabancidiziizle-9/", "home-series", ProviderMediaType.SERIES, showOnHome = true),
         "most_commented" to Section("En Çok Yorumlananlar", "/en-cok-yorumlananlar-3/", "mostCommented", ProviderMediaType.MOVIE, showOnHome = false),
         "most_liked" to Section("En Çok Beğenilenler", "/en-cok-begenilen-filmleri-izle-5/", "mostLiked", ProviderMediaType.MOVIE, showOnHome = false),
         "action" to Section("Aksiyon", "/tur/aksiyon-filmleri-izleyin-9/", "genres/aksiyon-filmleri-izleyin-9", ProviderMediaType.MOVIE, showOnHome = false),
@@ -119,7 +119,9 @@ class HdFilmCehennemiProvider(
         val sectionId = request.sectionId ?: defaultSectionId
         val section = fallbackSections[sectionId] ?: fallbackSections.getValue(defaultSectionId)
         val page = request.page.coerceAtLeast(1)
+        // Use the configured .nl archive for series as well as movies.
         val base = absolute(section.path)
+        val pageDomain = base.toHttpUrl().let { "${it.scheme}://${it.host}" }
 
         if (page == 1) {
             val doc = fetchDocument(base)
@@ -153,16 +155,16 @@ class HdFilmCehennemiProvider(
                 }
 
                 val cleanAction = cachedAction.pageAction.trim('/')
-                val pageUrl = "$activeDomain/load/page/$page/$cleanAction/"
+                val pageUrl = "$pageDomain/load/page/$page/$cleanAction/"
                 val jsonText = fetchWithHeaders(pageUrl, mapOf(
                     "X-Requested-With" to "fetch",
-                    "Referer" to "$activeDomain/",
+                    "Referer" to "$pageDomain/",
                 ))
                 val fragmentHtml = runCatching {
                     json.parseToJsonElement(jsonText).jsonObject["html"]?.jsonPrimitive?.contentOrNull
                 }.getOrNull().orEmpty()
 
-                val fragmentDoc = Jsoup.parseBodyFragment(fragmentHtml, activeDomain)
+                val fragmentDoc = Jsoup.parseBodyFragment(fragmentHtml, pageDomain)
                 val items = parseCards(fragmentDoc, section.mediaType)
                 val nextPage = if (items.isNotEmpty() && page < cachedAction.maxPages) page + 1 else null
 
@@ -194,7 +196,7 @@ class HdFilmCehennemiProvider(
                 ?: if (section.mediaType == ProviderMediaType.SERIES) "tvshows" else "movies"
             val termId = pagination?.termId ?: "0"
 
-            val ajaxUrl = "$activeDomain/wp-admin/admin-ajax.php"
+            val ajaxUrl = "$pageDomain/wp-admin/admin-ajax.php"
             val ajaxBody = postAjax(
                 ajaxUrl,
                 mapOf(
@@ -205,7 +207,7 @@ class HdFilmCehennemiProvider(
                 ),
             )
 
-            val fragmentDoc = Jsoup.parseBodyFragment(ajaxBody, activeDomain)
+            val fragmentDoc = Jsoup.parseBodyFragment(ajaxBody, pageDomain)
             val items = parseCards(fragmentDoc, section.mediaType)
             val nextPage = if (items.isNotEmpty() && page < maxPages) page + 1 else null
 
@@ -413,6 +415,7 @@ class HdFilmCehennemiProvider(
 
     internal suspend fun resolvePlayback(pageUrl: String): ProviderResult<Playback> = guarded("playback") {
         val cacheKey = pageUrl
+        val playbackDomain = pageUrl.toHttpUrl().let { "${it.scheme}://${it.host}" }
         val cached = playbackCache[cacheKey]
         if (cached != null && System.currentTimeMillis() - cached.createdAtMillis < PLAYBACK_TTL_MILLIS) {
             return@guarded cached.value
@@ -436,7 +439,7 @@ class HdFilmCehennemiProvider(
                 .add("player_name", playerName)
                 .build()
             val ajaxReq = Request.Builder()
-                .url("$activeDomain/wp-admin/admin-ajax.php")
+                .url("$playbackDomain/wp-admin/admin-ajax.php")
                 .post(formBody)
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", pageUrl)
@@ -448,7 +451,9 @@ class HdFilmCehennemiProvider(
             }.getOrNull()
 
             if (!setPlayUrl.isNullOrBlank()) {
-                val setPlayHtml = fetchWithHeaders(setPlayUrl, mapOf("Referer" to "$activeDomain/"))
+                val setPlayHtml = runCatching {
+                    fetchWithHeaders(setPlayUrl, mapOf("Referer" to pageUrl))
+                }.getOrNull().orEmpty()
                 val setPlayPair = HdFilmCehennemiCodec.parseSetPlayCerceve(setPlayHtml)
                 if (setPlayPair != null) {
                     val fastPlayUrl = HdFilmCehennemiCodec.xorDecode(setPlayPair.first, setPlayPair.second)
@@ -506,7 +511,7 @@ class HdFilmCehennemiProvider(
             val videoId = videoButtons.firstNotNullOfOrNull { it.attr("data-video").takeIf { id -> id.isNotBlank() } }
 
             if (videoId != null) {
-                val videoEndpoint = "$activeDomain/video/$videoId/"
+                val videoEndpoint = "$playbackDomain/video/$videoId/"
                 val videoJsonText = runCatching {
                     fetchWithHeaders(videoEndpoint, mapOf(
                         "X-Requested-With" to "fetch",
@@ -530,7 +535,7 @@ class HdFilmCehennemiProvider(
 
         // 3. Resolve iframe embed to HLS stream URL
         if (iframeSrc != null) {
-            val iframeHtml = fetchWithHeaders(iframeSrc, mapOf("Referer" to "$activeDomain/"))
+            val iframeHtml = fetchWithHeaders(iframeSrc, mapOf("Referer" to "$playbackDomain/"))
             val iframeHost = runCatching { iframeSrc.toHttpUrl().host }.getOrDefault("hdfilmcehennemi.mobi")
 
             val streamUrl = HdFilmCehennemiCodec.decryptRapidrame(iframeHtml, iframeHost)
@@ -793,7 +798,7 @@ class HdFilmCehennemiProvider(
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
-            .header("Referer", "$activeDomain/")
+            .header("Referer", url.toHttpUrl().let { "${it.scheme}://${it.host}/" })
             .header("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7")
             .build()
 
@@ -828,7 +833,7 @@ class HdFilmCehennemiProvider(
             .url(url)
             .post(form)
             .header("User-Agent", USER_AGENT)
-            .header("Referer", "$activeDomain/")
+            .header("Referer", url.toHttpUrl().let { "${it.scheme}://${it.host}/" })
             .header("X-Requested-With", "XMLHttpRequest")
             .build()
 

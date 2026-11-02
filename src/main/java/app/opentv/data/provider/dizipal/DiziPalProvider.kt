@@ -86,6 +86,19 @@ class DiziPalProvider(
 
     private val sections = linkedMapOf(
         "latest" to Section("Diziler", "/yabanci-dizi-izle"),
+        "romantik" to Section("Romantik", "/kategori/romantik", showOnHome = false),
+        "aksiyon" to Section("Aksiyon", "/kategori/aksiyon", showOnHome = false),
+        "dram" to Section("Dram", "/kategori/dram", showOnHome = false),
+        "komedi" to Section("Komedi", "/kategori/komedi", showOnHome = false),
+        "korku" to Section("Korku", "/kategori/korku", showOnHome = false),
+        "gerilim" to Section("Gerilim", "/kategori/gerilim", showOnHome = false),
+        "bilim-kurgu" to Section("Bilim Kurgu", "/kategori/bilim-kurgu", showOnHome = false),
+        "animasyon" to Section("Animasyon", "/kategori/animasyon", showOnHome = false),
+        "suc" to Section("Suç", "/kategori/suc", showOnHome = false),
+        "macera" to Section("Macera", "/kategori/macera", showOnHome = false),
+        "fantastik" to Section("Fantastik", "/kategori/fantastik", showOnHome = false),
+        "gizem" to Section("Gizem", "/kategori/gizem", showOnHome = false),
+        "aile" to Section("Aile", "/kategori/aile", showOnHome = false),
         "episodes" to Section("Son Bölümler", "/yeni-eklenen-dizi-bolumler", latestEpisodes = true),
         "netflix" to Section("Netflix", "/kanal/netflix"),
         "exxen" to Section("Exxen", "/kanal/exxen"),
@@ -131,7 +144,9 @@ class DiziPalProvider(
 
             else -> {
                 val target = listingPageUrl(base, section.path, page)
-                parseSeriesCards(fetchDocument(target))
+                val doc = fetchDocument(target)
+                if (section.path.startsWith("/kategori/")) parseCategorySeriesCards(doc)
+                else parseSeriesCards(doc)
             }
         }
 
@@ -291,6 +306,13 @@ class DiziPalProvider(
             is ProviderResult.Failure -> result
         }
     }
+
+    /** The category page embeds unrelated recommended titles in its Next.js payload.
+     * Read only visible genre-grid cards so unrelated titles never enter the category. */
+    internal fun parseCategorySeriesCards(doc: Document): List<ProviderItem> =
+        doc.select("a.tc[href^='/series/'], a.tc[href^='/dizi/']")
+            .mapNotNull { parseSeriesAnchor(it, it, doc) }
+            .distinctBy { it.id }
 
     internal fun parseSeriesCards(doc: Document): List<ProviderItem> {
         val legacy = doc.select("ul.content-grid > li").mapNotNull { element ->

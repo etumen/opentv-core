@@ -9,6 +9,32 @@ class DiziBoxProviderTest {
     private val provider = DiziBoxProvider(OkHttpClient())
 
     @Test
+    fun verifiedGenreSectionsAreAvailableForSeries() {
+        val expected = setOf("action", "crime", "drama", "romantik", "komedi",
+            "korku", "gerilim", "bilim-kurgu", "animasyon", "macera",
+            "fantastik", "gizem", "aile")
+        val sections = provider.catalogSections.associateBy { it.id }
+        assertThat(sections.keys).containsAtLeastElementsIn(expected)
+        expected.forEach { id ->
+            assertThat(sections.getValue(id).mediaType)
+                .isEqualTo(app.opentv.data.provider.ProviderMediaType.SERIES)
+            if (id != "action") assertThat(sections.getValue(id).showOnHome).isFalse()
+        }
+    }
+
+    @Test
+    fun genrePageNeverReturnsMoviesAsSeries() {
+        val doc = Jsoup.parse("""
+            <main>
+              <a href="/film/comedy-film"><h3>Film Only</h3></a>
+              <a href="/dizi/comedy-show"><h3>Comedy Series</h3></a>
+            </main>
+        """.trimIndent(), "https://ddizibox.com/tur/komedi")
+        assertThat(provider.parseSeriesCards(doc).map { it.title })
+            .containsExactly("Comedy Series")
+    }
+
+    @Test
     fun parseSeriesCards_keepsSeriesCardsAndMetadata() {
         val doc = Jsoup.parse(
             """

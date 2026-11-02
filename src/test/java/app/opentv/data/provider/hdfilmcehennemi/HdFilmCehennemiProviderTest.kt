@@ -11,6 +11,7 @@ import app.opentv.data.provider.ProviderResult
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.Jsoup
 import org.junit.Test
 
@@ -18,14 +19,46 @@ class HdFilmCehennemiProviderTest {
 
     private val provider = HdFilmCehennemiProvider(OkHttpClient())
 
+    @Test fun seriesCatalogUsesNlArchiveWithMockPagination() = runBlocking {
+        val urls = mutableListOf<String>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val url = chain.request().url.toString()
+            urls += url
+            val card = if ("admin-ajax.php" in url) "Two" else "One"
+            val paging = if (card == "One")
+                """<div class="page-numbers" data-max-pages="2" data-type="tvshows" data-term-id="0"></div>"""
+                else ""
+            val html = """$paging<article class="item tvshows"><div class="poster">
+                <a href="https://www.hdfilmcehennemi.nl/dizi/$card/">
+                <h2 class="flbaslik">$card</h2></a></div></article>"""
+            okhttp3.Response.Builder().request(chain.request())
+                .protocol(okhttp3.Protocol.HTTP_1_1).code(200).message("OK")
+                .body(html.toResponseBody()).build()
+        }.build()
+        val source = HdFilmCehennemiProvider(client)
+        val first = source.catalog(app.opentv.data.provider.ProviderCatalogRequest(
+            ProviderMediaType.SERIES, "series", 1))
+        val second = source.catalog(app.opentv.data.provider.ProviderCatalogRequest(
+            ProviderMediaType.SERIES, "series", 2))
+        assertThat(first).isInstanceOf(ProviderResult.Success::class.java)
+        assertThat(second).isInstanceOf(ProviderResult.Success::class.java)
+        assertThat((first as ProviderResult.Success).value.items.map { it.title })
+            .containsExactly("One")
+        assertThat(first.value.nextPage).isEqualTo(2)
+        assertThat((second as ProviderResult.Success).value.items.map { it.title })
+            .containsExactly("Two")
+        assertThat(urls).containsExactly(
+            "https://www.hdfilmcehennemi.nl/yabancidiziizle-9/",
+            "https://www.hdfilmcehennemi.nl/wp-admin/admin-ajax.php").inOrder()
+    }
     @Test
     fun cardParser_readsMovieCards() {
         val html = """
             <article id="post-26468" class="item dortlu movies">
                 <div class="imdb"><span>IMDb</span>5.7</div>
                 <div class="poster">
-                    <a href="https://www.hdfilmcehennemi.land/film/ali-g-ben-kimim/">
-                        <img src="data:image/gif;base64,R0lGODlh" data-src="https://www.hdfilmcehennemi.land/thumb_/ali-g.webp" alt="Ali G: Ben Kimim? Poster">
+                    <a href="https://www.hdfilmcehennemi.nl/film/ali-g-ben-kimim/">
+                        <img src="data:image/gif;base64,R0lGODlh" data-src="https://www.hdfilmcehennemi.nl/thumb_/ali-g.webp" alt="Ali G: Ben Kimim? Poster">
                         <div class="figure">
                             <div class="data">
                                 <h2 class="flbaslik">Ali G: Ben Kimim?</h2>
@@ -38,17 +71,17 @@ class HdFilmCehennemiProviderTest {
             </article>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/film/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/film/")
         val items = provider.parseCards(doc, ProviderMediaType.MOVIE)
 
         assertThat(items).hasSize(1)
         val item = items.first()
-        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.land/film/ali-g-ben-kimim/")
+        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.nl/film/ali-g-ben-kimim/")
         assertThat(item.title).isEqualTo("Ali G: Ben Kimim?")
         assertThat(item.mediaType).isEqualTo(ProviderMediaType.MOVIE)
         assertThat(item.year).isEqualTo(2026)
         assertThat(item.rating).isWithin(0.001).of(5.7)
-        assertThat(item.posterUrl).isEqualTo("https://www.hdfilmcehennemi.land/thumb_/ali-g.webp")
+        assertThat(item.posterUrl).isEqualTo("https://www.hdfilmcehennemi.nl/thumb_/ali-g.webp")
     }
 
     @Test
@@ -57,8 +90,8 @@ class HdFilmCehennemiProviderTest {
             <article id="post-26263" class="item dortlu tvshows">
                 <div class="imdb"><span>IMDb</span>7.9</div>
                 <div class="poster">
-                    <a href="https://www.hdfilmcehennemi.land/dizi/helluva-boss/">
-                        <img src="data:image/gif;base64,R0lGODlh" data-src="https://www.hdfilmcehennemi.land/thumb_/helluva.webp" alt="Helluva Boss Poster">
+                    <a href="https://www.hdfilmcehennemi.nl/dizi/helluva-boss/">
+                        <img src="data:image/gif;base64,R0lGODlh" data-src="https://www.hdfilmcehennemi.nl/thumb_/helluva.webp" alt="Helluva Boss Poster">
                         <div class="figure">
                             <div class="data">
                                 <h2 class="flbaslik">Helluva Boss</h2>
@@ -70,12 +103,12 @@ class HdFilmCehennemiProviderTest {
             </article>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/dizi/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/dizi/")
         val items = provider.parseCards(doc, ProviderMediaType.SERIES)
 
         assertThat(items).hasSize(1)
         val item = items.first()
-        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.land/dizi/helluva-boss/")
+        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.nl/dizi/helluva-boss/")
         assertThat(item.title).isEqualTo("Helluva Boss")
         assertThat(item.mediaType).isEqualTo(ProviderMediaType.SERIES)
         assertThat(item.year).isEqualTo(2019)
@@ -88,15 +121,15 @@ class HdFilmCehennemiProviderTest {
             <article>
                 <div class="image">
                     <div class="thumbnail animation-2">
-                        <a href="https://www.hdfilmcehennemi.land/film/batman-ve-superman-izle/">
-                            <img src="https://www.hdfilmcehennemi.land/uploads/batman.webp" alt="Batman" />
+                        <a href="https://www.hdfilmcehennemi.nl/film/batman-ve-superman-izle/">
+                            <img src="https://www.hdfilmcehennemi.nl/uploads/batman.webp" alt="Batman" />
                             <span class="movies">Film</span>
                         </a>
                     </div>
                 </div>
                 <div class="details">
                     <div class="title">
-                        <a href="https://www.hdfilmcehennemi.land/film/batman-ve-superman-izle/">
+                        <a href="https://www.hdfilmcehennemi.nl/film/batman-ve-superman-izle/">
                             Batman ve Superman - Dawn of Justice
                         </a>
                     </div>
@@ -111,12 +144,12 @@ class HdFilmCehennemiProviderTest {
             </article>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/?s=Batman")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/?s=Batman")
         val items = provider.parseCards(doc, ProviderMediaType.MOVIE)
 
         assertThat(items).hasSize(1)
         val item = items.first()
-        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.land/film/batman-ve-superman-izle/")
+        assertThat(item.id).isEqualTo("https://www.hdfilmcehennemi.nl/film/batman-ve-superman-izle/")
         assertThat(item.title).isEqualTo("Batman ve Superman")
         assertThat(item.mediaType).isEqualTo(ProviderMediaType.MOVIE)
         assertThat(item.year).isEqualTo(2016)
@@ -128,23 +161,23 @@ class HdFilmCehennemiProviderTest {
     fun cardParser_skipsEpisodesAndDuplicateHrefs() {
         val html = """
             <article class="item">
-                <a href="https://www.hdfilmcehennemi.land/bolum/reacher-1-sezon-1-bolum/">
+                <a href="https://www.hdfilmcehennemi.nl/bolum/reacher-1-sezon-1-bolum/">
                     <h2>Episode should not become catalog item</h2>
                 </a>
             </article>
             <article class="item movies">
-                <a href="https://www.hdfilmcehennemi.land/film/valid-movie/">
+                <a href="https://www.hdfilmcehennemi.nl/film/valid-movie/">
                     <h2 class="flbaslik">Valid Movie</h2>
                 </a>
             </article>
             <article class="item movies">
-                <a href="https://www.hdfilmcehennemi.land/film/valid-movie/">
+                <a href="https://www.hdfilmcehennemi.nl/film/valid-movie/">
                     <h2 class="flbaslik">Duplicate Movie</h2>
                 </a>
             </article>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/")
         val items = provider.parseCards(doc, ProviderMediaType.MOVIE)
 
         assertThat(items).hasSize(1)
@@ -157,7 +190,7 @@ class HdFilmCehennemiProviderTest {
             <html>
             <head>
                 <meta property="og:description" content="Batman v Superman summary">
-                <meta property="og:image" content="https://www.hdfilmcehennemi.land/uploads/batman-poster.webp">
+                <meta property="og:image" content="https://www.hdfilmcehennemi.nl/uploads/batman-poster.webp">
             </head>
             <body>
                 <div class="data">
@@ -188,15 +221,15 @@ class HdFilmCehennemiProviderTest {
             </html>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/film/batman-ve-superman/")
-        val details = provider.parseDetails(doc, "https://www.hdfilmcehennemi.land/film/batman-ve-superman/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/film/batman-ve-superman/")
+        val details = provider.parseDetails(doc, "https://www.hdfilmcehennemi.nl/film/batman-ve-superman/")
 
         assertThat(details).isNotNull()
         assertThat(details?.item?.title).isEqualTo("Batman ve Superman: Adaletin Şafağı")
         assertThat(details?.item?.mediaType).isEqualTo(ProviderMediaType.MOVIE)
         assertThat(details?.item?.year).isEqualTo(2016)
         assertThat(details?.item?.rating).isWithin(0.001).of(6.5)
-        assertThat(details?.item?.posterUrl).isEqualTo("https://www.hdfilmcehennemi.land/uploads/batman-poster.webp")
+        assertThat(details?.item?.posterUrl).isEqualTo("https://www.hdfilmcehennemi.nl/uploads/batman-poster.webp")
         assertThat(details?.item?.genres).containsExactly("Aksiyon", "Macera")
         assertThat(details?.durationSeconds).isEqualTo(151 * 60)
         assertThat(details?.externalIds).containsEntry("imdb", "tt2975590")
@@ -210,7 +243,7 @@ class HdFilmCehennemiProviderTest {
             <html>
             <head>
                 <meta property="og:description" content="Helluva Boss animated series">
-                <meta property="og:image" content="https://www.hdfilmcehennemi.land/uploads/helluva.webp">
+                <meta property="og:image" content="https://www.hdfilmcehennemi.nl/uploads/helluva.webp">
             </head>
             <body>
                 <div class="data">
@@ -230,8 +263,8 @@ class HdFilmCehennemiProviderTest {
             </html>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/dizi/helluva-boss/")
-        val details = provider.parseDetails(doc, "https://www.hdfilmcehennemi.land/dizi/helluva-boss/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/dizi/helluva-boss/")
+        val details = provider.parseDetails(doc, "https://www.hdfilmcehennemi.nl/dizi/helluva-boss/")
 
         assertThat(details).isNotNull()
         assertThat(details?.item?.title).isEqualTo("Helluva Boss")
@@ -290,16 +323,16 @@ class HdFilmCehennemiProviderTest {
             </div>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/dizi/helluva-boss/")
-        val episodes = provider.parseEpisodes(doc, "https://www.hdfilmcehennemi.land/dizi/helluva-boss/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/dizi/helluva-boss/")
+        val episodes = provider.parseEpisodes(doc, "https://www.hdfilmcehennemi.nl/dizi/helluva-boss/")
 
         assertThat(episodes).hasSize(3)
 
         assertThat(episodes[0].season).isEqualTo(1)
         assertThat(episodes[0].episodeNumber).isEqualTo(1)
         assertThat(episodes[0].title).isEqualTo("Murder Family")
-        assertThat(episodes[0].id).isEqualTo("https://www.hdfilmcehennemi.land/bolum/helluva-boss-1-sezon-1-bolum/")
-        assertThat(episodes[0].stillUrl).isEqualTo("https://www.hdfilmcehennemi.land/thumbs/s1e1.webp")
+        assertThat(episodes[0].id).isEqualTo("https://www.hdfilmcehennemi.nl/bolum/helluva-boss-1-sezon-1-bolum/")
+        assertThat(episodes[0].stillUrl).isEqualTo("https://www.hdfilmcehennemi.nl/thumbs/s1e1.webp")
 
         assertThat(episodes[1].season).isEqualTo(1)
         assertThat(episodes[1].episodeNumber).isEqualTo(2)
@@ -319,8 +352,8 @@ class HdFilmCehennemiProviderTest {
             </ul>
         """.trimIndent()
 
-        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.land/dizi/mini-series/")
-        val episodes = provider.parseEpisodes(doc, "https://www.hdfilmcehennemi.land/dizi/mini-series/")
+        val doc = Jsoup.parse(html, "https://www.hdfilmcehennemi.nl/dizi/mini-series/")
+        val episodes = provider.parseEpisodes(doc, "https://www.hdfilmcehennemi.nl/dizi/mini-series/")
 
         assertThat(episodes).hasSize(2)
         assertThat(episodes[0].season).isEqualTo(1)
@@ -333,10 +366,10 @@ class HdFilmCehennemiProviderTest {
 
     @Test
     fun malformedHtml_handledGracefullyWithoutCrashing() {
-        val emptyDoc = Jsoup.parse("", "https://www.hdfilmcehennemi.land/")
+        val emptyDoc = Jsoup.parse("", "https://www.hdfilmcehennemi.nl/")
         assertThat(provider.parseCards(emptyDoc, ProviderMediaType.MOVIE)).isEmpty()
-        assertThat(provider.parseDetails(emptyDoc, "https://www.hdfilmcehennemi.land/film/broken")).isNull()
-        assertThat(provider.parseEpisodes(emptyDoc, "https://www.hdfilmcehennemi.land/dizi/broken")).isEmpty()
+        assertThat(provider.parseDetails(emptyDoc, "https://www.hdfilmcehennemi.nl/film/broken")).isNull()
+        assertThat(provider.parseEpisodes(emptyDoc, "https://www.hdfilmcehennemi.nl/dizi/broken")).isEmpty()
     }
 
     @Test
